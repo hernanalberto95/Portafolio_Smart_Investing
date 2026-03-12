@@ -8,8 +8,8 @@ import scipy.optimize as sco
 from datetime import datetime, timedelta
 from scipy.stats import norm
 
-# Configuración Global
-st.set_page_config(page_title="Dashboard Pro", layout="wide")
+# 1. CONFIGURACIÓN E INTERFAZ
+st.set_page_config(page_title="Smart Investing Pro", layout="wide")
 st.markdown("""<style>.stApp { background-color: #050505; color: #E0E0E0; } 
     h1, h2, h3 { color: #BA68C8; } .stMetric { background-color: #121212; padding: 15px; border-radius: 10px; border: 1px solid #4A148C; }</style>""", unsafe_allow_html=True)
 
@@ -17,111 +17,128 @@ st.markdown("""<style>.stApp { background-color: #050505; color: #E0E0E0; }
 def get_data(tickers, benchmark):
     all_symbols = list(set(tickers + [benchmark]))
     data_list = []
-    for s in all_symbols:
-        # Descarga individual para evitar MultiIndex de yfinance
-        d = yf.download(s, period="5y")
-        if not d.empty:
-            # Seleccionamos solo el cierre ajustado y lo renombramos con el ticker
-            df_temp = d[['Adj Close']].copy()
-            df_temp.columns = [s]
-            data_list.append(df_temp)
     
-    if not data_list: return pd.DataFrame()
-    # Unimos todos los tickers en un solo DataFrame plano
-    df = pd.concat(data_list, axis=1)
-    return df.dropna(how='all')
+    for s in all_symbols:
+        try:
+            # Descargamos el ticker individualmente
+            df_raw = yf.download(s, period="5y", progress=False)
+            if df_raw.empty:
+                continue
+            
+            # ELIMINAR MULTIINDEX: Forzamos a que las columnas sean nombres simples (Open, Close, etc.)
+            if isinstance(df_raw.columns, pd.MultiIndex):
+                df_raw.columns = df_raw.columns.get_level_values(0)
+            
+            # Buscamos 'Adj Close' o 'Close' de forma defensiva
+            col_name = "Adj Close" if "Adj Close" in df_raw.columns else "Close"
+            
+            # Extraemos la columna y la renombramos al ticker para que la tabla sea limpia
+            temp = df_raw[[col_name]].copy()
+            temp.columns = [s]
+            data_list.append(temp)
+        except Exception:
+            continue
+            
+    if not data_list:
+        return pd.DataFrame()
+        
+    # Unimos todos en una sola tabla: Filas = Fechas, Columnas = Tickers
+    final_df = pd.concat(data_list, axis=1)
+    return final_df.dropna(how='all')
 
-st.title("📈 Dashboard Financiero Pro")
+st.title("📈 Smart Investing Dashboard")
 ticker_input = st.sidebar.text_input("Tickers (separados por coma):", "AAPL, MSFT, GOOGL, AMZN")
-tickers = [t.strip().upper() for t in ticker_input.split(",")]
+tickers = [t.strip().upper() for t in ticker_input.split(",") if t.strip()]
 benchmark = "^GSPC"
 
-data = get_data(tickers, benchmark)
+# 2. PROCESAMIENTO DE DATOS
+data_raw = get_data(tickers, benchmark)
 
-# Validación crítica para la nube
-if data.empty or any(t not in data.columns for t in tickers):
-    st.error("No se pudieron cargar datos. Verifica los tickers o tu conexión.")
+# Verificamos qué tickers se descargaron realmente para no pedir columnas que no existen
+valid_tickers = [t for t in tickers if t in data_raw.columns]
+
+if data_raw.empty or len(valid_tickers) == 0:
+    st.error("No se pudieron obtener datos. Verifica los símbolos o la conexión con Yahoo Finance.")
     st.stop()
 
-# 1. Evolución de Precios
+# Usamos solo los datos de los tickers que sí bajaron
+data = data_raw[valid_tickers]
+
+# 3. VISUALIZACIÓN - EVOLUCIÓN
 st.header("1. Evolución de Precios")
 c1, c2 = st.columns(2)
 with c1:
-    st.subheader("Todos los Activos (Base 100)")
-    fig_all = px.line((data[tickers] / data[tickers].iloc[0]) * 100, template="plotly_dark", color_discrete_sequence=px.colors.sequential.Purples_r)
-    fig_all.update_layout(showlegend=False)
+    st.subheader("Rendimiento Acumulado (Base 100)")
+    # Base 100: (Precio Actual / Primer Precio) * 100
+    fig_all = px.line((data / data.iloc[0]) * 100, template="plotly_dark", color_discrete_sequence=px.colors.sequential.Purples_r)
+    fig_all.update_layout(showlegend=True, legend_title="Activos")
     st.plotly_chart(fig_all, use_container_width=True)
 with c2:
-    sel = st.selectbox("Seleccionar Activo:", tickers)
-    st.subheader(f"Precio: {sel}")
+    sel = st.selectbox("Analizar Activo Individual:", valid_tickers)
     fig_ind = px.line(data[sel], template="plotly_dark", color_discrete_sequence=['#BA68C8'])
-    fig_ind.update_layout(showlegend=False)
     st.plotly_chart(fig_ind, use_container_width=True)
 
-# 2. Métricas y Matrices
-returns = np.log(data[tickers] / data[tickers].shift(1)).dropna()
-st.header("2. Métricas y Relaciones")
-st.dataframe(pd.DataFrame({'Retorno Anual': returns.mean()*252, 'Volatilidad': returns.std()*np.sqrt(252), 'Máximo': data[tickers].max(), 'Mínimo': data[tickers].min()}), use_container_width=True)
+# 4. MÉTRICAS Y RIESGO
+returns = np.log(data / data.shift(1)).dropna()
+st.header("2. Análisis de Riesgo y Retorno")
+st.dataframe(pd.DataFrame({
+    'Retorno Anualizado': returns.mean() * 252,
+    'Volatilidad (Std)': returns.std() * np.sqrt(252),
+    'Máximo Histórico': data.max(),
+    'Mínimo Histórico': data.min()
+}).T, use_container_width=True)
 
-c3, c4 = st.columns(2)
-c3.plotly_chart(px.imshow(returns.corr(), text_auto=".2f", color_continuous_scale="Purples").update_layout(showlegend=False), use_container_width=True)
-c4.plotly_chart(px.imshow(returns.cov()*252, text_auto=".4f", color_continuous_scale="Purples").update_layout(showlegend=False), use_container_width=True)
+# 5. OPTIMIZACIÓN DE PORTAFOLIO
+st.header("3. Optimización (Max Sharpe Ratio)")
+def get_perf(w):
+    p_ret = np.sum(returns.mean() * w) * 252
+    p_vol = np.sqrt(np.dot(w.T, np.dot(returns.cov() * 252, w)))
+    return p_ret, p_vol
 
-# 3. Portafolio Optimizado
-st.header("3. Portafolio Optimizado (Max Sharpe)")
-def get_perf(w): return np.sum(returns.mean()*w)*252, np.sqrt(np.dot(w.T, np.dot(returns.cov()*252, w)))
-opt = sco.minimize(lambda w: -(get_perf(w)[0]-0.04)/get_perf(w)[1], len(tickers)*[1./len(tickers)], bounds=[(0, 0.4) for _ in tickers], constraints=({'type': 'eq', 'fun': lambda x: np.sum(x) - 1}))
+# Maximizar Sharpe = Minimizar -(Retorno - RiskFree) / Volatilidad
+def min_func_sharpe(w):
+    p_ret, p_vol = get_perf(w)
+    return -(p_ret - 0.04) / p_vol
 
-c_pie1, c_pie2 = st.columns([2, 1])
-with c_pie1:
-    fig_pie = px.pie(names=tickers, values=opt.x, hole=0.4, color_discrete_sequence=['#4A148C', '#7B1FA2', '#9C27B0', '#CE93D8'])
-    fig_pie.update_layout(showlegend=False)
+cons = ({'type': 'eq', 'fun': lambda x: np.sum(x) - 1})
+bounds = tuple((0, 0.5) for _ in range(len(valid_tickers)))
+init_guess = len(valid_tickers) * [1. / len(valid_tickers)]
+
+opt_res = sco.minimize(min_func_sharpe, init_guess, method='SLSQP', bounds=bounds, constraints=cons)
+weights = opt_res.x
+
+c_p1, c_p2 = st.columns([2, 1])
+with c_p1:
+    fig_pie = px.pie(names=valid_tickers, values=weights, hole=0.4, title="Distribución Óptima")
     st.plotly_chart(fig_pie, use_container_width=True)
-with c_pie2:
-    st.write("### Composición")
-    df_weights = pd.DataFrame({'Activo': tickers, 'Peso': opt.x})
-    st.dataframe(df_weights.style.format({'Peso': '{:.2%}'}), use_container_width=True, hide_index=True)
+with c_p2:
+    st.write("### Pesos Asignados")
+    st.table(pd.DataFrame({'Activo': valid_tickers, 'Peso': weights}).style.format({'Peso': '{:.2%}'}))
 
-ret_p, std_p = get_perf(opt.x)
-c_m1, c_m2, c_m3 = st.columns(3)
-c_m1.metric("Rendimiento Anual", f"{ret_p:.2%}")
-c_m2.metric("Desviación Estándar", f"{std_p:.2%}")
-c_m3.metric("Sharpe Ratio", f"{(ret_p-0.04)/std_p:.2f}")
+# 6. BACKTESTING VS BENCHMARK
+st.header("4. Comparativa vs Benchmark (S&P 500)")
+if benchmark in data_raw.columns:
+    port_returns = (returns * weights).sum(axis=1)
+    bench_returns = np.log(data_raw[benchmark] / data_raw[benchmark].shift(1)).dropna()
+    
+    df_compare = pd.DataFrame({
+        'Mi Portafolio': (1 + port_returns).cumprod(),
+        'Benchmark (^GSPC)': (1 + bench_returns).cumprod()
+    }).dropna()
+    
+    fig_bench = px.line(df_compare, template="plotly_dark", title="Crecimiento de $1 invertido")
+    st.plotly_chart(fig_bench, use_container_width=True)
 
-# 4. Backtesting
-st.header("4. Backtesting")
-c5, c6 = st.columns(2)
-port_rets = (returns * opt.x).sum(axis=1)
-df_back = pd.DataFrame({'Portafolio': (1 + port_rets).cumprod(), 'Benchmark': (1 + np.log(data[benchmark] / data[benchmark].shift(1)).dropna()).cumprod()})
-fig_back = px.line(df_back, color_discrete_sequence=['#BA68C8', '#4A148C'], template="plotly_dark")
-fig_back.update_layout(title="Portafolio Optimizado vs Benchmark", showlegend=True)
-c5.plotly_chart(fig_back, use_container_width=True)
-fig_roll = px.line(((port_rets.rolling(126).mean()*252) - 0.04) / (port_rets.rolling(126).std()*np.sqrt(252)), color_discrete_sequence=['#CE93D8'], template="plotly_dark")
-fig_roll.update_layout(title="Rolling Sharpe (6 meses)", showlegend=False)
-c6.plotly_chart(fig_roll, use_container_width=True)
+# 7. MONTE CARLO (ESTRELLA FINAL)
+st.header("5. Simulación Monte Carlo (Proyección 1 Año)")
+mu, sigma = get_perf(weights)
+sim_returns = np.random.normal(mu/252, sigma/np.sqrt(252), (252, 1000))
+price_sim = np.cumprod(1 + sim_returns, axis=0)
 
-# 5. Análisis de Riesgo
-st.header("5. Análisis de Riesgo")
-conf = st.select_slider("Nivel de Confianza:", options=[90, 95, 99], value=95)
-alpha = (100 - conf) / 100
-port_rets = (returns * opt.x).sum(axis=1)
-mu_anual = port_rets.mean() * 252
-sigma_anual = port_rets.std() * np.sqrt(252)
-Z = np.random.normal(0, 1, (252, 10000))
-price_paths = np.cumprod(np.exp((mu_anual/252 - 0.5 * (sigma_anual/np.sqrt(252))**2) + (sigma_anual/np.sqrt(252)) * Z), axis=0)
-var_hist = abs(np.percentile(port_rets, alpha * 100) * np.sqrt(252))
-var_param = abs(mu_anual - norm.ppf(alpha, 0, 1) * sigma_anual)
-var_mc = abs(np.percentile(price_paths[-1] - 1, alpha * 100))
+fig_mc = px.line(price_sim[:, :50], template="plotly_dark", title="50 Trayectorias Posibles")
+fig_mc.update_layout(showlegend=False)
+st.plotly_chart(fig_mc, use_container_width=True)
 
-c7, c8, c9 = st.columns(3)
-c7.metric(f"VaR Histórico {conf}%", f"{var_hist:.2%}")
-c8.metric(f"VaR Paramétrico {conf}%", f"{var_param:.2%}")
-c9.metric(f"VaR Monte Carlo {conf}%", f"{var_mc:.2%}")
-
-c10, c11 = st.columns(2)
-fig_hist = px.histogram(price_paths[-1] - 1, title=f"Distribución (Confianza {conf}%)", color_discrete_sequence=["#9C27B0"], template="plotly_dark")
-fig_hist.update_layout(showlegend=False)
-c10.plotly_chart(fig_hist, use_container_width=True)
-fig_paths = px.line(price_paths[:, ::100], title="Trayectorias Monte Carlo", color_discrete_sequence=["#BA68C8"], template="plotly_dark")
-fig_paths.update_layout(showlegend=False)
-c11.plotly_chart(fig_paths, use_container_width=True)
+# Valor en Riesgo (VaR)
+var_95 = np.percentile(price_sim[-1], 5)
+st.metric("Valor en Riesgo (VaR 95%)", f"{1 - var_95:.2%}", delta="Pérdida máxima esperada", delta_color="inverse")
