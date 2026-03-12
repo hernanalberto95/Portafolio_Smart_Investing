@@ -18,8 +18,10 @@ def get_data(tickers, benchmark):
     all_tickers = list(set(tickers + [benchmark]))
     end = datetime.today()
     start = end - timedelta(days=5*365)
-    # Descarga robusta forzando formato de DataFrame
-    df = yf.download(all_tickers, start=start, end=end)['Adj Close']
+    # FORZAMOS la estructura para evitar el KeyError en la nube
+    df = yf.download(all_tickers, start=start, end=end)
+    if 'Adj Close' in df.columns:
+        df = df['Adj Close']
     return df.dropna(how='all')
 
 # Diccionario de búsqueda
@@ -39,13 +41,14 @@ if not tickers:
 benchmark = "^GSPC"
 data = get_data(tickers, benchmark)
 
+# Asegurar que solo operamos con tickers que existen en el DataFrame descargado
+valid_tickers = [t for t in tickers if t in data.columns]
+
 # 1. Evolución de Precios
 st.header("1. Evolución de Precios")
 c1, c2 = st.columns(2)
 with c1:
     st.subheader("Todos los Activos (Base 100)")
-    # Validación de columnas para evitar el KeyError
-    valid_tickers = [t for t in tickers if t in data.columns]
     fig_all = px.line((data[valid_tickers] / data[valid_tickers].iloc[0]) * 100, template="plotly_dark", color_discrete_sequence=px.colors.sequential.Purples_r)
     fig_all.update_layout(showlegend=False)
     st.plotly_chart(fig_all, use_container_width=True)
