@@ -15,10 +15,16 @@ st.markdown("""<style>.stApp { background-color: #050505; color: #E0E0E0; }
 
 @st.cache_data
 def get_data(tickers, benchmark):
-    # Descargamos todo y forzamos a que solo devuelva el Adj Close como un DataFrame plano
     all_symbols = list(set(tickers + [benchmark]))
-    data = yf.download(all_symbols, period="5y")['Adj Close']
-    return data.dropna(how='all')
+    # Descargamos
+    df = yf.download(all_symbols, period="5y")
+    
+    # Aplanamos el DataFrame:
+    # Si yfinance devuelve MultiIndex, tomamos Adj Close y lo convertimos a tabla simple
+    if isinstance(df.columns, pd.MultiIndex):
+        df = df['Adj Close']
+    
+    return df.dropna(how='all')
 
 st.title("📈 Dashboard Financiero Pro")
 ticker_input = st.sidebar.text_input("Tickers (separados por coma):", "AAPL, MSFT, GOOGL, AMZN")
@@ -29,7 +35,7 @@ data = get_data(tickers, benchmark)
 
 # Validación simple
 if data.empty:
-    st.error("Error: No se obtuvieron datos. Revisa los tickers.")
+    st.error("Error: No se obtuvieron datos. Revisa los tickers o tu conexión.")
     st.stop()
 
 # 1. Evolución de Precios
