@@ -59,8 +59,9 @@ st.header("2. Métricas y Relaciones")
 st.dataframe(pd.DataFrame({'Retorno Anual': returns.mean()*252, 'Volatilidad': returns.std()*np.sqrt(252), 'Máximo': data[tickers].max(), 'Mínimo': data[tickers].min()}), use_container_width=True)
 
 c3, c4 = st.columns(2)
-c3.plotly_chart(px.imshow(returns.corr(), text_auto=".2f", color_continuous_scale="Purples").update_layout(showlegend=False), use_container_width=True)
-c4.plotly_chart(px.imshow(returns.cov()*252, text_auto=".4f", color_continuous_scale="Purples").update_layout(showlegend=False), use_container_width=True)
+# Añadidos títulos a las matrices:
+c3.plotly_chart(px.imshow(returns.corr(), text_auto=".2f", color_continuous_scale="Purples").update_layout(title="Matriz de Correlación", showlegend=False), use_container_width=True)
+c4.plotly_chart(px.imshow(returns.cov()*252, text_auto=".4f", color_continuous_scale="Purples").update_layout(title="Matriz de Covarianza", showlegend=False), use_container_width=True)
 
 # 3. Portafolio Optimizado
 st.header("3. Portafolio Optimizado (Max Sharpe)")
