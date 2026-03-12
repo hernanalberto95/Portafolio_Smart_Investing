@@ -15,12 +15,27 @@ st.markdown("""<style>.stApp { background-color: #050505; color: #E0E0E0; }
 
 @st.cache_data
 def get_data(tickers, benchmark):
-    end = datetime.today(); start = end - timedelta(days=5*365)
-    df = yf.download(tickers + [benchmark], start=start, end=end)
-    return (df['Adj Close'] if 'Adj Close' in df.columns else df['Close'] if 'Close' in df.columns else df.xs('Close', level=0, axis=1)).dropna()
+    all_tickers = list(set(tickers + [benchmark]))
+    end = datetime.today()
+    start = end - timedelta(days=5*365)
+    # Descarga robusta forzando formato de DataFrame
+    df = yf.download(all_tickers, start=start, end=end)['Adj Close']
+    return df.dropna(how='all')
+
+# Diccionario de búsqueda
+company_map = {
+    "Apple": "AAPL", "Microsoft": "MSFT", "Alphabet (Google)": "GOOGL", 
+    "Amazon": "AMZN", "Walmart": "WMT", "Tesla": "TSLA", "NVIDIA": "NVDA"
+}
 
 st.title("📈 Dashboard Financiero Pro")
-tickers = [t.strip().upper() for t in st.sidebar.text_input("Tickers (separados por coma):", "AAPL, MSFT, GOOGL, AMZN").split(",")]
+selected_names = st.sidebar.multiselect("Seleccionar empresas:", list(company_map.keys()), default=["Apple", "Microsoft", "Alphabet (Google)", "Amazon"])
+tickers = [company_map[name] for name in selected_names]
+
+if not tickers:
+    st.warning("Por favor, selecciona al menos una empresa.")
+    st.stop()
+
 benchmark = "^GSPC"
 data = get_data(tickers, benchmark)
 
@@ -29,20 +44,22 @@ st.header("1. Evolución de Precios")
 c1, c2 = st.columns(2)
 with c1:
     st.subheader("Todos los Activos (Base 100)")
-    fig_all = px.line((data[tickers] / data[tickers].iloc[0]) * 100, template="plotly_dark", color_discrete_sequence=px.colors.sequential.Purples_r)
+    # Validación de columnas para evitar el KeyError
+    valid_tickers = [t for t in tickers if t in data.columns]
+    fig_all = px.line((data[valid_tickers] / data[valid_tickers].iloc[0]) * 100, template="plotly_dark", color_discrete_sequence=px.colors.sequential.Purples_r)
     fig_all.update_layout(showlegend=False)
     st.plotly_chart(fig_all, use_container_width=True)
 with c2:
-    sel = st.selectbox("Seleccionar Activo:", tickers)
+    sel = st.selectbox("Seleccionar Activo:", valid_tickers)
     st.subheader(f"Precio: {sel}")
     fig_ind = px.line(data[sel], template="plotly_dark", color_discrete_sequence=['#BA68C8'])
     fig_ind.update_layout(showlegend=False)
     st.plotly_chart(fig_ind, use_container_width=True)
 
 # 2. Métricas y Matrices
-returns = np.log(data[tickers] / data[tickers].shift(1)).dropna()
+returns = np.log(data[valid_tickers] / data[valid_tickers].shift(1)).dropna()
 st.header("2. Métricas y Relaciones")
-st.dataframe(pd.DataFrame({'Retorno Anual': returns.mean()*252, 'Volatilidad': returns.std()*np.sqrt(252), 'Máximo': data[tickers].max(), 'Mínimo': data[tickers].min()}), use_container_width=True)
+st.dataframe(pd.DataFrame({'Retorno Anual': returns.mean()*252, 'Volatilidad': returns.std()*np.sqrt(252), 'Máximo': data[valid_tickers].max(), 'Mínimo': data[valid_tickers].min()}), use_container_width=True)
 
 c3, c4 = st.columns(2)
 c3.plotly_chart(px.imshow(returns.corr(), text_auto=".2f", color_continuous_scale="Purples").update_layout(showlegend=False), use_container_width=True)
@@ -51,16 +68,16 @@ c4.plotly_chart(px.imshow(returns.cov()*252, text_auto=".4f", color_continuous_s
 # 3. Portafolio Optimizado
 st.header("3. Portafolio Optimizado (Max Sharpe)")
 def get_perf(w): return np.sum(returns.mean()*w)*252, np.sqrt(np.dot(w.T, np.dot(returns.cov()*252, w)))
-opt = sco.minimize(lambda w: -(get_perf(w)[0]-0.04)/get_perf(w)[1], len(tickers)*[1./len(tickers)], bounds=[(0, 0.4) for _ in tickers], constraints=({'type': 'eq', 'fun': lambda x: np.sum(x) - 1}))
+opt = sco.minimize(lambda w: -(get_perf(w)[0]-0.04)/get_perf(w)[1], len(valid_tickers)*[1./len(valid_tickers)], bounds=[(0, 0.4) for _ in valid_tickers], constraints=({'type': 'eq', 'fun': lambda x: np.sum(x) - 1}))
 
 c_pie1, c_pie2 = st.columns([2, 1])
 with c_pie1:
-    fig_pie = px.pie(names=tickers, values=opt.x, hole=0.4, color_discrete_sequence=['#4A148C', '#7B1FA2', '#9C27B0', '#CE93D8'])
+    fig_pie = px.pie(names=valid_tickers, values=opt.x, hole=0.4, color_discrete_sequence=['#4A148C', '#7B1FA2', '#9C27B0', '#CE93D8'])
     fig_pie.update_layout(showlegend=False)
     st.plotly_chart(fig_pie, use_container_width=True)
 with c_pie2:
     st.write("### Composición")
-    df_weights = pd.DataFrame({'Activo': tickers, 'Peso': opt.x})
+    df_weights = pd.DataFrame({'Activo': valid_tickers, 'Peso': opt.x})
     st.dataframe(df_weights.style.format({'Peso': '{:.2%}'}), use_container_width=True, hide_index=True)
 
 ret_p, std_p = get_perf(opt.x)
@@ -81,21 +98,17 @@ fig_roll = px.line(((port_rets.rolling(126).mean()*252) - 0.04) / (port_rets.rol
 fig_roll.update_layout(title="Rolling Sharpe (6 meses)", showlegend=False)
 c6.plotly_chart(fig_roll, use_container_width=True)
 
-# 5. Análisis de Riesgo (Dinámico)
+# 5. Análisis de Riesgo
 st.header("5. Análisis de Riesgo")
 conf = st.select_slider("Nivel de Confianza:", options=[90, 95, 99], value=95)
 alpha = (100 - conf) / 100
-
 port_rets = (returns * opt.x).sum(axis=1)
 mu_anual = port_rets.mean() * 252
 sigma_anual = port_rets.std() * np.sqrt(252)
-
-# Cálculos
-var_hist = abs(np.percentile(port_rets, alpha * 100) * np.sqrt(252))
-var_param = abs(mu_anual - norm.ppf(alpha, 0, 1) * sigma_anual)
-# Monte Carlo
 Z = np.random.normal(0, 1, (252, 10000))
 price_paths = np.cumprod(np.exp((mu_anual/252 - 0.5 * (sigma_anual/np.sqrt(252))**2) + (sigma_anual/np.sqrt(252)) * Z), axis=0)
+var_hist = abs(np.percentile(port_rets, alpha * 100) * np.sqrt(252))
+var_param = abs(mu_anual - norm.ppf(alpha, 0, 1) * sigma_anual)
 var_mc = abs(np.percentile(price_paths[-1] - 1, alpha * 100))
 
 c7, c8, c9 = st.columns(3)
