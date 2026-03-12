@@ -16,53 +16,44 @@ st.markdown("""<style>.stApp { background-color: #050505; color: #E0E0E0; }
 @st.cache_data
 def get_data(tickers, benchmark):
     all_tickers = list(set(tickers + [benchmark]))
-    end = datetime.today()
-    start = end - timedelta(days=5*365)
-    # FORZAMOS la estructura para evitar el KeyError en la nube
+    end = datetime.today(); start = end - timedelta(days=5*365)
     df = yf.download(all_tickers, start=start, end=end)
-    if 'Adj Close' in df.columns:
+    # Corrección para la nube: Si es MultiIndex, tomamos Adj Close
+    if isinstance(df.columns, pd.MultiIndex):
+        df = df['Adj Close']
+    elif 'Adj Close' in df.columns:
         df = df['Adj Close']
     return df.dropna(how='all')
 
-# Diccionario de búsqueda
-company_map = {
-    "Apple": "AAPL", "Microsoft": "MSFT", "Alphabet (Google)": "GOOGL", 
-    "Amazon": "AMZN", "Walmart": "WMT", "Tesla": "TSLA", "NVIDIA": "NVDA"
-}
-
 st.title("📈 Dashboard Financiero Pro")
-selected_names = st.sidebar.multiselect("Seleccionar empresas:", list(company_map.keys()), default=["Apple", "Microsoft", "Alphabet (Google)", "Amazon"])
-tickers = [company_map[name] for name in selected_names]
-
-if not tickers:
-    st.warning("Por favor, selecciona al menos una empresa.")
-    st.stop()
-
+tickers = [t.strip().upper() for t in st.sidebar.text_input("Tickers (separados por coma):", "AAPL, MSFT, GOOGL, AMZN").split(",")]
 benchmark = "^GSPC"
 data = get_data(tickers, benchmark)
 
-# Asegurar que solo operamos con tickers que existen en el DataFrame descargado
-valid_tickers = [t for t in tickers if t in data.columns]
+# Validación crítica para que no rompa en la nube
+if data.empty:
+    st.error("No se pudieron cargar datos. Verifica los tickers.")
+    st.stop()
 
 # 1. Evolución de Precios
 st.header("1. Evolución de Precios")
 c1, c2 = st.columns(2)
 with c1:
     st.subheader("Todos los Activos (Base 100)")
-    fig_all = px.line((data[valid_tickers] / data[valid_tickers].iloc[0]) * 100, template="plotly_dark", color_discrete_sequence=px.colors.sequential.Purples_r)
+    fig_all = px.line((data[tickers] / data[tickers].iloc[0]) * 100, template="plotly_dark", color_discrete_sequence=px.colors.sequential.Purples_r)
     fig_all.update_layout(showlegend=False)
     st.plotly_chart(fig_all, use_container_width=True)
 with c2:
-    sel = st.selectbox("Seleccionar Activo:", valid_tickers)
+    sel = st.selectbox("Seleccionar Activo:", tickers)
     st.subheader(f"Precio: {sel}")
     fig_ind = px.line(data[sel], template="plotly_dark", color_discrete_sequence=['#BA68C8'])
     fig_ind.update_layout(showlegend=False)
     st.plotly_chart(fig_ind, use_container_width=True)
 
 # 2. Métricas y Matrices
-returns = np.log(data[valid_tickers] / data[valid_tickers].shift(1)).dropna()
+returns = np.log(data[tickers] / data[tickers].shift(1)).dropna()
 st.header("2. Métricas y Relaciones")
-st.dataframe(pd.DataFrame({'Retorno Anual': returns.mean()*252, 'Volatilidad': returns.std()*np.sqrt(252), 'Máximo': data[valid_tickers].max(), 'Mínimo': data[valid_tickers].min()}), use_container_width=True)
+st.dataframe(pd.DataFrame({'Retorno Anual': returns.mean()*252, 'Volatilidad': returns.std()*np.sqrt(252), 'Máximo': data[tickers].max(), 'Mínimo': data[tickers].min()}), use_container_width=True)
 
 c3, c4 = st.columns(2)
 c3.plotly_chart(px.imshow(returns.corr(), text_auto=".2f", color_continuous_scale="Purples").update_layout(showlegend=False), use_container_width=True)
@@ -71,16 +62,16 @@ c4.plotly_chart(px.imshow(returns.cov()*252, text_auto=".4f", color_continuous_s
 # 3. Portafolio Optimizado
 st.header("3. Portafolio Optimizado (Max Sharpe)")
 def get_perf(w): return np.sum(returns.mean()*w)*252, np.sqrt(np.dot(w.T, np.dot(returns.cov()*252, w)))
-opt = sco.minimize(lambda w: -(get_perf(w)[0]-0.04)/get_perf(w)[1], len(valid_tickers)*[1./len(valid_tickers)], bounds=[(0, 0.4) for _ in valid_tickers], constraints=({'type': 'eq', 'fun': lambda x: np.sum(x) - 1}))
+opt = sco.minimize(lambda w: -(get_perf(w)[0]-0.04)/get_perf(w)[1], len(tickers)*[1./len(tickers)], bounds=[(0, 0.4) for _ in tickers], constraints=({'type': 'eq', 'fun': lambda x: np.sum(x) - 1}))
 
 c_pie1, c_pie2 = st.columns([2, 1])
 with c_pie1:
-    fig_pie = px.pie(names=valid_tickers, values=opt.x, hole=0.4, color_discrete_sequence=['#4A148C', '#7B1FA2', '#9C27B0', '#CE93D8'])
+    fig_pie = px.pie(names=tickers, values=opt.x, hole=0.4, color_discrete_sequence=['#4A148C', '#7B1FA2', '#9C27B0', '#CE93D8'])
     fig_pie.update_layout(showlegend=False)
     st.plotly_chart(fig_pie, use_container_width=True)
 with c_pie2:
     st.write("### Composición")
-    df_weights = pd.DataFrame({'Activo': valid_tickers, 'Peso': opt.x})
+    df_weights = pd.DataFrame({'Activo': tickers, 'Peso': opt.x})
     st.dataframe(df_weights.style.format({'Peso': '{:.2%}'}), use_container_width=True, hide_index=True)
 
 ret_p, std_p = get_perf(opt.x)
